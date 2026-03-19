@@ -1,0 +1,84 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import sqlite3
+from datetime import datetime
+
+# 🔹 Log function
+def log_progress(message):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open("code_log.txt", "a") as file:
+        file.write(f"{timestamp},{message}\n")
+
+# 🔹 Extract function
+def extract(url):
+    table_attribs = ["Name", "MC_USD_Billion"]
+    df = pd.DataFrame(columns=table_attribs)
+
+    html_page = requests.get(url).text
+    soup = BeautifulSoup(html_page, 'html.parser')
+
+    tables = soup.find_all('tbody')
+    rows = tables[0].find_all('tr')
+
+    for row in rows:
+        col = row.find_all('td')
+        if len(col) != 0:
+            data_dict = {
+                "Name": col[1].text.strip(),
+                "MC_USD_Billion": float(col[2].text.strip())
+            }
+            df = pd.concat([df, pd.DataFrame([data_dict])], ignore_index=True)
+
+    return df
+
+# 🔹 Transform function
+def transform(df, csv_path):
+    exchange_rate = pd.read_csv(csv_path)
+
+    rate_gbp = exchange_rate.loc[exchange_rate['Currency'] == 'GBP', 'Rate'].values[0]
+    rate_eur = exchange_rate.loc[exchange_rate['Currency'] == 'EUR', 'Rate'].values[0]
+    rate_inr = exchange_rate.loc[exchange_rate['Currency'] == 'INR', 'Rate'].values[0]
+
+    df['MC_GBP_Billion'] = round(df['MC_USD_Billion'] * rate_gbp, 2)
+    df['MC_EUR_Billion'] = round(df['MC_USD_Billion'] * rate_eur, 2)
+    df['MC_INR_Billion'] = round(df['MC_USD_Billion'] * rate_inr, 2)
+
+    return df
+
+# 🔹 Load to CSV
+def load_to_csv(df, output_path):
+    df.to_csv(output_path, index=False)
+
+# 🔹 Load to DB
+def load_to_db(df, conn, table_name):
+    df.to_sql(table_name, conn, if_exists='replace', index=False)
+
+# 🔹 Run query
+def run_query(query, conn):
+    result = pd.read_sql(query, conn)
+    print(result)
+    log_progress("SQL Query Executed")
+
+# 🔹 Main execution
+url = "https://web.archive.org/web/20230908091635/https://en.wikipedia.org/wiki/List_of_largest_banks"
+
+log_progress("ETL Job Started")
+
+df = extract(url)
+log_progress("Data Extracted")
+
+df = transform(df, "exchange_rate.csv")
+log_progress("Data Transformed")
+
+load_to_csv(df, "Largest_banks.csv")
+log_progress("Data Saved to CSV")
+
+conn = sqlite3.connect("Banks.db")
+load_to_db(df, conn, "Largest_banks")
+log_progress("Data Loaded to DB")
+
+run_query("SELECT * FROM Largest_banks LIMIT 5", conn)
+
+conn.close()
+log_progress("ETL Job Completed")
